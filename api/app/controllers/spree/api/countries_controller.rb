@@ -7,6 +7,11 @@ module Spree
       def index
         @countries = Spree::Country.accessible_by(current_ability, :read).ransack(params[:q]).result.
                      includes(:states).order('name ASC')
+                     
+        if params[:page] || params[:per_page]
+          @countries = @countries.page(params[:page]).per(params[:per_page])
+        end
+                     
         country = Spree::Country.order("updated_at ASC").last
         if stale?(country)
           respond_with(@countries)
