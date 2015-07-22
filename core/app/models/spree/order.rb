@@ -70,6 +70,11 @@ module Spree
     has_many :products, through: :variants
     has_many :variants, through: :line_items
     has_many :refunds, through: :payments
+    has_many :all_adjustments,
+             class_name: 'Spree::Adjustment',
+             foreign_key: :order_id,
+             dependent: :destroy,
+             inverse_of: :order
 
     has_and_belongs_to_many :promotions, join_table: 'spree_orders_promotions'
 
@@ -99,6 +104,7 @@ module Spree
     validate :has_available_shipment
 
     delegate :update_totals, :persist_totals, :to => :updater
+    delegate :merge!, to: :merger
 
     class_attribute :update_hooks
     self.update_hooks = Set.new
@@ -130,11 +136,6 @@ module Spree
     # that should be called when determining if two line items are equal.
     def self.register_line_item_comparison_hook(hook)
       self.line_item_comparison_hooks.add(hook)
-    end
-
-    def all_adjustments
-      Adjustment.where("order_id = :order_id OR (adjustable_id = :order_id AND adjustable_type = 'Spree::Order')",
-                       order_id: self.id)
     end
 
     # For compatiblity with Calculator::PriceSack
@@ -203,6 +204,10 @@ module Spree
 
     def update!
       updater.update
+    end
+
+    def merger
+      @merger ||= Spree::OrderMerger.new(self)
     end
 
     def clone_billing_address
@@ -394,39 +399,6 @@ module Spree
       else
         true
       end
-    end
-
-    def merge!(order, user = nil)
-      order.line_items.each do |other_order_line_item|
-        next unless other_order_line_item.currency == currency
-
-        # Compare the line items of the other order with mine.
-        # Make sure you allow any extensions to chime in on whether or
-        # not the extension-specific parts of the line item match
-        current_line_item = self.line_items.detect { |my_li|
-                      my_li.variant == other_order_line_item.variant &&
-                      self.line_item_comparison_hooks.all? { |hook|
-                        self.send(hook, my_li, other_order_line_item.serializable_hash)
-                      }
-                    }
-        if current_line_item
-          current_line_item.quantity += other_order_line_item.quantity
-          current_line_item.save!
-        else
-          other_order_line_item.order_id = self.id
-          other_order_line_item.save!
-        end
-      end
-
-      self.associate_user!(user) if !self.user && !user.blank?
-
-      updater.update_item_count
-      updater.update_item_total
-      updater.persist_totals
-
-      # So that the destroy doesn't take out line items which may have been re-assigned
-      order.line_items.reload
-      order.destroy
     end
 
     def empty!
